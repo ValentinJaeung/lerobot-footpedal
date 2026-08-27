@@ -1,0 +1,12 @@
+# Norimate — pedal + uinput permissions (Ubuntu).
+# Install:
+#   sudo cp 99-norimate-pedal.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Your user must be in the "input" group (sudo usermod -aG input $USER; then re-login).
+
+# PCsensor 3-pedal foot switch (VID:PID 0c45:7403). If your pedal differs,
+# find its ids with `lsusb` and change idVendor/idProduct below.
+SUBSYSTEM=="input", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="7403", MODE="0660", GROUP="input"
+
+# Allow the bridge to create a virtual keyboard via uinput.
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
