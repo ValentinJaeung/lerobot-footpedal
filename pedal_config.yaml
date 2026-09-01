@@ -1,36 +1,15 @@
-# Norimate pedal bridge configuration.
-#
-# 1) Find your pedal device:      python3 pedal_bridge.py --list
-# 2) Find each pedal's raw code:  python3 pedal_bridge.py --detect --device <path>
-#    Step on each pedal and note the printed `code=` value.
-# 3) Fill in `device` and the three `code` values below.
-
-# Stable device path is best (survives replug). Example for a PCsensor pedal:
-#   /dev/input/by-id/usb-PCsensor_FootSwitch-event-kbd
-# A plain /dev/input/eventN also works but can change on reboot.
-device: "/dev/input/by-id/CHANGE_ME-event-kbd"
-
-# Grab the device exclusively so its raw keystrokes don't also leak into the
-# terminal (prevents double input). Leave this true.
+device: "/dev/input/by-id/usb-PCsensor_FootSwitch-event-kbd"
 grab: true
 
-# Map each physical pedal (its raw code) to the LeRobot control key we emit.
-#   left   -> KEY_R : re-record current episode   (LeRobot ← / r)
-#   center -> KEY_Q : stop, encode & save          (LeRobot ESC / q)
-#   right  -> KEY_N : save & go to next episode     (LeRobot → / n)
 bindings:
-  left:   { code: 30, key: KEY_R }   # 30 is a placeholder — set from --detect
-  center: { code: 48, key: KEY_Q }   # 48 is a placeholder
-  right:  { code: 46, key: KEY_N }   # 46 is a placeholder
+  left:   { code: 30, key: KEY_R }   # pedal sends 'a'
+  center: { code: 48, key: KEY_Q }   # pedal sends 'b'
+  right:  { code: 46, key: KEY_N }   # pedal sends 'c'
 
-# Debounce so accidental double-taps don't fire twice.
 debounce:
-  cooldown_s: 0.5          # ignore a repeat of the SAME action within this window
-  global_lockout_s: 0.15   # ignore ANY action this soon after another one fired
+  cooldown_s: 0.5
+  global_lockout_s: 0.15
 
-# Extra safety for the destructive "stop" action: the center pedal must be held
-# down for at least hold_s before it fires. A quick accidental tap is ignored.
-hold_to_confirm:
+double_tap:
   action: center
-  hold_s: 0.4
-  cooldown_s: 1.0
+  window_s: 2.0
