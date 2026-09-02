@@ -1,179 +1,162 @@
 #!/usr/bin/env python3
-"""Norimate pedal bridge: foot switch -> LeRobot record keys, with debounce
-and a double-tap guard on the stop pedal."""
-import argparse
+"""
+pedal_bridge.py — PCsensor 3-pedal foot switch -> LeRobot record control keys.
+
+  Left   (KEY_A) -> r   re-record current episode
+  Center (KEY_B) -> q   quit/stop  (requires a DOUBLE-TAP to confirm)
+  Right  (KEY_C) -> n   save + next episode
+
+What this does:
+  1. Opens the pedal by its stable by-id path.
+  2. grab()s it so the raw A/B/C never leak into the desktop / LeRobot
+     (otherwise LeRobot would get BOTH the raw keys and our clean keys).
+  3. Acts only on the "press" moment; ignores release and auto-repeat.
+  4. Debounces each pedal so an accidental fast double-press = one action.
+  5. Guards the STOP pedal with a double-tap: one stray press never ends
+     the session.
+  6. Re-emits clean n / r / q through a virtual uinput keyboard that
+     LeRobot sees as a normal keyboard.
+
+Run (after install.sh + re-login, no sudo needed):
+    python3 pedal_bridge.py
+
+Override the device path if your pedal shows up elsewhere:
+    NORIMATE_PEDAL_PATH=/dev/input/eventX python3 pedal_bridge.py
+"""
+
 import os
 import sys
+import glob
 import time
 
 try:
-    import yaml
+    from evdev import InputDevice, UInput, ecodes as e
 except ImportError:
-    sys.exit("Missing dependency: pip install PyYAML")
+    sys.exit("Missing dependency. Install it with:  pip install evdev")
 
-try:
-    from evdev import InputDevice, UInput, categorize, list_devices, ecodes as e
-except ImportError:
-    sys.exit("Missing dependency: pip install evdev")
+# ------------------------- Config (tune these) --------------------------
+# Stable path for the PCsensor FootSwitch keyboard node. Same for anyone
+# using this exact pedal model. Override with NORIMATE_PEDAL_PATH if needed.
+DEFAULT_PATH = "/dev/input/by-id/usb-PCsensor_FootSwitch-event-kbd"
 
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              "pedal_config.yaml")
+# raw pedal key  ->  LeRobot control key
+MAPPING = {
+    e.KEY_A: e.KEY_R,   # left   -> re-record
+    e.KEY_B: e.KEY_Q,   # center -> quit  (double-tap guarded below)
+    e.KEY_C: e.KEY_N,   # right  -> next
+}
 
+CONFIRM_KEY = e.KEY_B   # the pedal that needs a double-tap before it fires
+DEBOUNCE_S  = 0.30      # ignore a repeat of the same (non-confirm) pedal within this
+DT_MIN_GAP  = 0.15      # 2nd confirm tap must be at least this far from the 1st (else = bounce)
+DT_WINDOW_S = 2.00      # ...and no later than this, or the 1st tap is forgotten
+# ------------------------------------------------------------------------
 
-def cmd_list():
-    paths = list_devices()
-    if not paths:
-        print("No input devices found (permissions? try: sudo, or join 'input' group).")
-        return
-    print(f"{'PATH':<32}  NAME")
-    for path in sorted(paths):
-        try:
-            d = InputDevice(path)
-            print(f"{path:<32}  {d.name}")
-        except Exception as ex:
-            print(f"{path:<32}  <unreadable: {ex}>")
-    print("\nTip: a stable path lives under /dev/input/by-id/ — prefer that in the config.")
+LABEL = {e.KEY_R: "re-record (r)", e.KEY_N: "next (n)", e.KEY_Q: "STOP (q)"}
 
 
-def cmd_detect(device):
-    dev = InputDevice(device)
-    try:
-        dev.grab()
-    except Exception as ex:
-        print(f"Could not grab device ({ex}); reading without exclusive grab.")
-    print(f"Listening on: {dev.name}")
-    print("Step on each pedal. Note the code= value for each. Ctrl-C to stop.\n")
-    try:
-        for ev in dev.read_loop():
-            if ev.type == e.EV_KEY and ev.value == 1:
-                k = categorize(ev)
-                print(f"  code={ev.code:<5} name={k.keycode}")
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try:
-            dev.ungrab()
-        except Exception:
-            pass
-
-
-def build_maps(cfg):
-    debounce = cfg.get("debounce", {}) or {}
-    default_cd = float(debounce.get("cooldown_s", 0.5))
-    lockout = float(debounce.get("global_lockout_s", 0.15))
-
-    dt = cfg.get("double_tap") or {}
-    dt_action = dt.get("action")
-    dt_window = float(dt.get("window_s", 2.0))
-
-    code_map = {}
-    emit_keys = set()
-    for name, b in cfg["bindings"].items():
-        code = int(b["code"])
-        key_name = b["key"]
-        key = getattr(e, key_name)
-        emit_keys.add(key)
-        code_map[code] = {
-            "name": name,
-            "key": key,
-            "key_name": key_name,
-            "needs_double": (name == dt_action),
-            "window_s": dt_window,
-            "cooldown": default_cd,
-        }
-    return code_map, sorted(emit_keys), lockout
-
-
-def run(cfg):
-    code_map, emit_keys, lockout = build_maps(cfg)
-
-    dev = InputDevice(cfg["device"])
-    if cfg.get("grab", True):
-        dev.grab()
-
-    ui = UInput({e.EV_KEY: emit_keys}, name="norimate-pedal")
-    time.sleep(0.2)
-
-    print(f"[norimate] bridging: {dev.name}  ({cfg['device']})")
-    for code, m in sorted(code_map.items()):
-        tag = f"  (tap twice within {m['window_s']:g}s)" if m["needs_double"] else ""
-        print(f"           pedal '{m['name']}' code={code} -> {m['key_name']}{tag}")
-    print("[norimate] keep the lerobot-record terminal focused. Ctrl-C to quit.")
-
-    last_fire = {}
-    last_any = 0.0
-    first_tap = {}
-
-    def emit(key):
-        ui.write(e.EV_KEY, key, 1)
-        ui.write(e.EV_KEY, key, 0)
-        ui.syn()
-
-    def fire(m):
-        nonlocal last_any
-        now = time.monotonic()
-        if now - last_fire.get(m["name"], 0.0) < m["cooldown"]:
-            return
-        if now - last_any < lockout:
-            return
-        emit(m["key"])
-        last_fire[m["name"]] = now
-        last_any = now
-        print(f"[norimate] {m['name']} -> {m['key_name']}")
-
-    try:
-        for ev in dev.read_loop():
-            if ev.type != e.EV_KEY or ev.value != 1:
-                continue
-            m = code_map.get(ev.code)
-            if not m:
-                continue
-            if m["needs_double"]:
-                now = time.monotonic()
-                t0 = first_tap.get(m["name"])
-                if t0 is not None and now - t0 <= m["window_s"]:
-                    first_tap.pop(m["name"], None)
-                    fire(m)
-                else:
-                    first_tap[m["name"]] = now
-                    print(f"[norimate] {m['name']}: tap again within "
-                          f"{m['window_s']:g}s to confirm STOP")
-            else:
-                fire(m)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try:
-            dev.ungrab()
-        except Exception:
-            pass
-        ui.close()
-        print("\n[norimate] bridge stopped.")
+def find_pedal():
+    """Resolve the pedal device path: env override -> default -> glob search."""
+    override = os.environ.get("NORIMATE_PEDAL_PATH")
+    if override:
+        return override
+    if os.path.exists(DEFAULT_PATH):
+        return DEFAULT_PATH
+    hits = sorted(glob.glob("/dev/input/by-id/*FootSwitch*event-kbd"))
+    return hits[0] if hits else DEFAULT_PATH
 
 
 def main():
-    p = argparse.ArgumentParser(description="Norimate foot-pedal -> LeRobot key bridge")
-    p.add_argument("--list", action="store_true", help="list input devices and exit")
-    p.add_argument("--detect", action="store_true", help="print pedal codes as you press")
-    p.add_argument("--device", help="device path (for --detect)")
-    p.add_argument("--config", default=DEFAULT_CONFIG, help="path to pedal_config.yaml")
-    args = p.parse_args()
+    path = find_pedal()
+    try:
+        dev = InputDevice(path)
+    except FileNotFoundError:
+        sys.exit(
+            f"Pedal not found at {path}.\n"
+            "Is it plugged in? List devices with:  ls -l /dev/input/by-id/\n"
+            "Then set NORIMATE_PEDAL_PATH to the right ...-event-kbd path."
+        )
+    except PermissionError:
+        sys.exit(
+            f"No permission to read {path}.\n"
+            "Run ./install.sh once and log out/in, or run with sudo for a quick test."
+        )
 
-    if args.list:
-        cmd_list()
-        return
-    if args.detect:
-        if not args.device:
-            sys.exit("--detect needs --device <path> (get it from --list)")
-        cmd_detect(args.device)
-        return
+    try:
+        ui = UInput({e.EV_KEY: [e.KEY_N, e.KEY_R, e.KEY_Q]}, name="norimate-pedal-kbd")
+    except PermissionError:
+        dev.close()
+        sys.exit(
+            "No permission to create a virtual keyboard at /dev/uinput.\n"
+            "Run ./install.sh once and log out/in, or run with sudo for a quick test."
+        )
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-    if "CHANGE_ME" in cfg.get("device", ""):
-        sys.exit("Edit pedal_config.yaml first: set `device` and the pedal codes "
-                 "(use --list and --detect).")
-    run(cfg)
+    dev.grab()  # exclusive: raw A/B/C stop here and never reach anything else
+    print(
+        f"Pedal bridge running on '{dev.name}'.\n"
+        "  Left = re-record   Center = STOP (tap twice)   Right = next\n"
+        "  Ctrl+C to quit.\n"
+    )
+
+    last_accept = {}       # keycode -> time of last accepted press (debounce)
+    confirm_first = None   # time of the 1st center tap, or None
+
+    def tap(keycode):
+        ui.write(e.EV_KEY, keycode, 1)   # press
+        ui.syn()
+        time.sleep(0.01)
+        ui.write(e.EV_KEY, keycode, 0)   # release
+        ui.syn()
+
+    try:
+        for event in dev.read_loop():
+            # Only key events, only the press moment.
+            # value 0 = release, value 2 = auto-repeat -> both ignored here.
+            if event.type != e.EV_KEY or event.value != 1:
+                continue
+            code = event.code
+            if code not in MAPPING:
+                continue
+
+            now = event.timestamp()  # kernel event time (robust to clock changes)
+
+            # ---- Center pedal: double-tap to confirm STOP -----------------
+            if code == CONFIRM_KEY:
+                if confirm_first is None:
+                    confirm_first = now
+                    print(f"STOP armed — tap center again within {DT_WINDOW_S:.0f}s to confirm.")
+                    continue
+                gap = now - confirm_first
+                if gap < DT_MIN_GAP:
+                    continue                     # too fast -> bounce, ignore
+                if gap <= DT_WINDOW_S:
+                    confirm_first = None
+                    print("-> STOP confirmed (q)")
+                    tap(MAPPING[code])
+                else:
+                    confirm_first = now          # window expired -> re-arm
+                    print(f"STOP armed — tap center again within {DT_WINDOW_S:.0f}s to confirm.")
+                continue
+
+            # ---- Left / Right pedals: debounce, then fire immediately ------
+            if now - last_accept.get(code, 0.0) < DEBOUNCE_S:
+                continue                         # accidental fast re-press -> ignore
+            last_accept[code] = now
+
+            if confirm_first is not None:        # pressed another pedal -> cancel pending STOP
+                confirm_first = None
+                print("STOP cancelled.")
+
+            key = MAPPING[code]
+            print(f"-> {LABEL[key]}")
+            tap(key)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        dev.ungrab()
+        ui.close()
+        print("\nPedal bridge stopped.")
 
 
 if __name__ == "__main__":
