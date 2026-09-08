@@ -21,7 +21,7 @@ Run (after install.sh + re-login, no sudo needed):
     python3 pedal_bridge.py
 
 Override the device path if your pedal shows up elsewhere:
-    NORIMATE_PEDAL_PATH=/dev/input/eventX python3 pedal_bridge.py
+    FOOTPEDAL_PATH=/dev/input/eventX python3 pedal_bridge.py
 """
 
 import os
@@ -57,7 +57,7 @@ LABEL = {e.KEY_R: "re-record (r)", e.KEY_N: "next (n)", e.KEY_Q: "STOP (q)"}
 
 def find_pedal():
     """Resolve the pedal device path: env override -> default -> glob search."""
-    override = os.environ.get("NORIMATE_PEDAL_PATH")
+    override = os.environ.get("FOOTPEDAL_PATH") or os.environ.get("NORIMATE_PEDAL_PATH")
     if override:
         return override
     if os.path.exists(DEFAULT_PATH):
@@ -83,7 +83,7 @@ def main():
         )
 
     try:
-        ui = UInput({e.EV_KEY: [e.KEY_N, e.KEY_R, e.KEY_Q]}, name="norimate-pedal-kbd")
+        ui = UInput({e.EV_KEY: [e.KEY_N, e.KEY_R, e.KEY_Q]}, name="footpedal-kbd")
     except PermissionError:
         dev.close()
         sys.exit(
