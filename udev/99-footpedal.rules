@@ -1,0 +1,5 @@
+# Give the 'input' group access to /dev/uinput (virtual keyboard creation).
+KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
+
+# PCsensor FootSwitch (USB 3553:b001) readable by the 'input' group.
+SUBSYSTEM=="input", ATTRS{idVendor}=="3553", ATTRS{idProduct}=="b001", GROUP="input", MODE="0660"
