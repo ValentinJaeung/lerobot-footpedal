@@ -21,20 +21,26 @@ to LeRobot are needed.**
 ## Requirements
 
 - Ubuntu (tested on 22.04 / 24.04)
-- A PCsensor FootSwitch, 3-pedal (USB ID `3553:b001`)
+- A PCsensor FootSwitch, 3-pedal (USB ID `3553:b001`), programmed to emit
+  `a` / `b` / `c` (left / center / right). These pedals are programmable, so
+  burn the keys once with [footswitch](https://github.com/rgerganov/footswitch):
+  `sudo footswitch -1 -k a -2 -k b -3 -k c`
 - LeRobot installed and working (`lerobot-record` on your PATH)
 - Python with `evdev`: `pip install evdev`
 
 ## Install
 
 ```bash
-git clone https://github.com/<your-username>/lerobot-footpedal.git
-cd lerobot-footpedal
+git clone https://github.com/ValentinJaeung/Norimate.git
+cd Norimate/pedal
 pip install -r requirements.txt
 
 sudo ./install.sh      # one-time: group + udev + uinput module
 # then log out and back in (or reboot)
 ```
+
+If you are using the whole Norimate repo, run `bash setup/install.sh` from the
+repo root instead — it does the same thing *and* installs the Python dep.
 
 `install.sh` adds you to the `input` group and opens the pedal and `/dev/uinput`
 to that group, so after re-login you can run the bridge **without sudo**.
@@ -70,14 +76,27 @@ bridge on exit. Pass it the same arguments you'd give `lerobot-record`:
 Keep the `run_record.sh` terminal focused while recording so the keystrokes land
 in the right place.
 
+> `run_record.sh` does not check whether the bridge actually came up — if the
+> bridge exits on a permission error, recording still starts, just without the
+> pedal. Watch for the `Pedal bridge running on ...` line.
+
+**Inside the Norimate repo** the bimanual arguments are long, so the usual flow
+is two terminals instead: `python3 pedal/pedal_bridge.py` in one, and
+`bash scripts/4_record.sh` in the other (keep the second one focused).
+
 ## Customize
 
-All settings are at the top of `pedal_bridge.py`:
+All settings are at the top of `pedal_bridge.py`. (`pedal_config.yaml` in this
+folder is **not read by the bridge** — it is a leftover; editing it does
+nothing.)
 
 - `MAPPING` — which pedal sends which control key
-- `DEBOUNCE_S` — accidental fast re-press window (default 0.30 s)
+- `DEBOUNCE_S` — accidental fast re-press window, left/right only (default 0.30 s)
 - `DT_WINDOW_S` — how long you have to complete the stop double-tap (default 2.0 s)
-- `DT_MIN_GAP` — minimum gap between the two stop taps (bounce guard)
+- `DT_MIN_GAP` — minimum gap between the two stop taps, bounce guard (default 0.15 s)
+- `CONFIRM_KEY` — which pedal needs the double-tap (default center, `KEY_B`)
+
+Pressing left or right while a stop is armed cancels it.
 
 Different pedal or key layout? Check what each pedal emits with
 `sudo evtest /dev/input/by-id/usb-PCsensor_FootSwitch-event-kbd`, then update
