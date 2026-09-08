@@ -58,6 +58,28 @@ Click into any text editor or empty terminal and press the pedals:
 - Rapid double-tap of a side pedal registers only **once**
 - The raw `a` / `b` / `c` never leak through
 
+## Verify against LeRobot (still no robot needed)
+
+`test_pedal_lerobot.py` starts LeRobot's own keyboard listener and nothing else,
+so you can confirm the pedals really drive the recording controls before any arm
+is plugged in.
+
+```bash
+python3 pedal_bridge.py          # terminal A
+python3 test_pedal_lerobot.py    # terminal B, keep it focused
+```
+
+Press each pedal once:
+
+| Pedal            | Event it must fire  |
+|------------------|---------------------|
+| Right            | `exit_early`        |
+| Left             | `rerecord_episode`  |
+| Center (twice)   | `stop_recording`    |
+
+Quit with `Ctrl+C`. `All three controls fired.` means you are ready to record;
+otherwise it lists what never arrived.
+
 ## Use it with LeRobot
 
 `run_record.sh` starts the bridge, launches `lerobot-record`, and cleans up the
